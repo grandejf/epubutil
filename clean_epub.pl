@@ -11,8 +11,9 @@ GetOptions('conf=s'=>\$conf_file,);
 $conf_file ||= "clean_epub.conf";
 
 my $conf = readConf($conf_file);
-$conf->{tidy} = 1;
-
+$conf->{tidy} = 1 unless defined $conf->{tidy};
+$conf->{noChapterHeaderTopMargin} = 1 unless defined $conf->{noChapterHeaderTopMargin};
+	
 my $filename = $ARGV[0];
 
 my $epub = new EPUBPackager($filename);
@@ -47,6 +48,53 @@ $epub->walk(sub {
     my $newContent = $doc->toStringHTML;
     if (($orgContent ne $newContent) || $conf->{tidy}) {
       $newContent = tidy($newContent);
+      $epub->replaceContent($filename, $newContent);
+    }
+  }
+  elsif ($filename =~ m!OEBPS/Styles/.*\.css$!oi) {
+    my $content = $epub->content($filename);
+    my $newContent = '';
+    my %changes;
+    $changes{'h1'}->{'margin-top'} = '' if $conf->{noChapterHeaderTopMargin};
+    if (scalar(keys %changes) > 0) {
+      foreach my $block (split /(\s+\S+\s+{(?:.*?)}(\s+|$))/os, $content) {
+	next unless $block;
+	my ($sel, $styleblock) = ($block =~ m!(\S+)\s*{(.*)}!os);
+	if ($sel && $changes{$sel}) {
+	  my @styles = map { s!^\s*(.*)\s*$!$1!o; $_; } split m!((?:/\*.*?\*/)|;)!s, $styleblock;
+	  my @newStyles;
+	  my %seenProps;
+	  foreach my $s (@styles) {
+	    next if $s eq ';';
+	    if ($s =~ m!/\*!o) {
+	      push @newStyles, $s;
+	    }
+	    elsif ($s =~ /^(.*):(.*)/o) {
+	      my ($prop, $value) = ($1, $2);
+	      $seenProps{$prop} = 1;
+	      my $change = $changes{$sel}->{$prop};
+	      if (defined($change)) {
+		if ($change ne '') {
+		  $s = "$prop: $change;";
+		  push @newStyles, $s;
+		}
+	      }
+	      else {
+		push @newStyles, "$s;";
+	      }
+	    }
+	    else {
+	      push @newStyles, $s;
+	    }
+	  }
+	  $newContent .= "$sel\n{\n". join("\n", @newStyles) . "}\n";
+	}
+	else {
+	  $newContent .= "$block";
+	}
+      }
+    }
+    if ($newContent) {
       $epub->replaceContent($filename, $newContent);
     }
   }
