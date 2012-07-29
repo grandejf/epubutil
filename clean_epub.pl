@@ -67,25 +67,23 @@ $epub->walk(sub {
 	  foreach my $s (@styles) {
 	    next if $s eq ';';
 	    if ($s =~ m!/\*!o) {
-	      push @newStyles, $s;
+	      # do nothing
 	    }
 	    elsif ($s =~ /^(.*):(.*)/o) {
 	      my ($prop, $value) = ($1, $2);
 	      $seenProps{$prop} = 1;
 	      my $change = $changes{$sel}->{$prop};
 	      if (defined($change)) {
+		$s = '';
 		if ($change ne '') {
 		  $s = "$prop: $change;";
-		  push @newStyles, $s;
 		}
 	      }
 	      else {
-		push @newStyles, "$s;";
+		$s = "$s;";
 	      }
 	    }
-	    else {
-	      push @newStyles, $s;
-	    }
+	    push @newStyles, $s if $s;
 	  }
 	  $newContent .= "$sel\n{\n". join("\n", @newStyles) . "}\n";
 	}
