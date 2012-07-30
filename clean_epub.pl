@@ -45,6 +45,31 @@ $epub->walk(sub {
 	}	
       }
     }
+    if ($conf->{createImgContainer}) {
+      foreach my $node ($doc->findnodes('//*[contains(@class,"caption")]')) {
+	my $prevNode = $node->previousSibling();
+	my @prevNodes;
+	while ($prevNode) {
+	  unshift @prevNodes, $prevNode;
+	  if ($prevNode->nodeType == XML_ELEMENT_NODE) {
+	    last;
+	  }
+	  $prevNode = $prevNode->previousSibling();
+	}
+	if ($prevNode) {
+	  if (scalar(@{$prevNode->findnodes('img')})>0) {
+	    my $container = $doc->createElement('div');
+	    $container->setAttribute('class','imgcontainer');
+	    foreach my $pnode (@prevNodes) {
+	      $pnode->parentNode->removeChild($pnode);
+	      $container->appendChild($pnode);
+	    }
+	    $node->replaceNode($container);
+	    $container->appendChild($node);
+	  }
+	}
+      }
+    }
     my $newContent = $doc->toStringHTML;
     if (($orgContent ne $newContent) || $conf->{tidy}) {
       $newContent = tidy($newContent);
@@ -90,6 +115,10 @@ $epub->walk(sub {
 	else {
 	  $newContent .= "$block";
 	}
+      }
+      if ($conf->{createImgContainer}) {
+	$newContent ||= $content;
+	$newContent .= ".imgcontainer\n{\npage-break-inside: avoid;\n}\n";
       }
     }
     if ($newContent) {
