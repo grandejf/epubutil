@@ -21,9 +21,14 @@ while (<SOURCE>) {
   $text =~ s!\s+$!!o;
   $metadata{$key} = $text;
 }
+my $text = '';
+while (<SOURCE>) {
+  $text .= $_;
+}
 close SOURCE;
 
 my $epub = EPUBPackager->new($epub_filename, {create=>1});
 
 $epub->setMetadata(\%metadata);
+$epub->add_to_spine($text);
 $epub->save();
