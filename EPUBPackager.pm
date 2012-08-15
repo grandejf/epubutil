@@ -2,9 +2,10 @@ package EPUBPackager;
 
 require Exporter;
 @ISA    = qw(Exporter);
-@EXPORT = qw();
+@EXPORT = qw(tidy);
 
 use Archive::Zip;
+use IPC::Open2;
 
 use strict;
 
@@ -227,6 +228,22 @@ sub save {
     }
     $self->{zip}->writeToFileNamed($self->{filename});
   }
+}
+
+
+sub tidy {
+  my ($html) = @_;
+  my $cmd = "tidy -asxhtml -q -wrap 0 2> /dev/null";
+  my $pid = open2(\*OUT,\*IN, $cmd);
+  print IN $html;
+  close IN;
+  $html = '';
+  while (<OUT>) {
+    $html .= $_;
+  }
+  close OUT;
+  waitpid($pid,0);
+  return $html;
 }
 
 1;
