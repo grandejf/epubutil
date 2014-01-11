@@ -6,6 +6,7 @@ require Exporter;
 
 use Archive::Zip;
 use IPC::Open2;
+use POSIX;
 
 use strict;
 
@@ -97,6 +98,9 @@ sub add_file {
 			      href=>$filename,
 			      'media-type'=>$mediatype,
 			      data=>$data};
+  if ($id eq 'nav') {
+    $self->{manifest}->{$id}->{properties} = 'nav';
+  }
 
   return $self->{manifest}->{$id};
 }
@@ -111,32 +115,62 @@ sub add_to_spine {
   my $self = shift;
   my ($xhtml, $filename, $flags) = @_;
 
+  my $epubversion =  $self->{meta}->{'epubversion'} || '2.0';
+  if ($epubversion > 2.0) {
+    $xhtml =~ s!<\!DOCTYPE(.*?)>!!os;
+    $xhtml = qq[<!DOCTYPE html>] . $xhtml;
+    print "$xhtml\n";
+  }
+
   unless ($filename) {
     $self->{xhtml_auto_ctr} ||= 1;
     $filename = sprintf("Text/content%0.8d.xhtml",$self->{xhtml_auto_ctr});
     $self->{xhtml_auto_ctr}++;
   }
+  $self->add_nav_point($filename,"A Chapter");
   my $e = $self->add_file($xhtml,$filename,$flags);
   push @{$self->{spine}}, $e->{id};
+  while ($xhtml =~ m!<img (.*?)/?>!go) {
+    my $attr = $1;
+    if ($attr =~ m!src="(.*?)"!o) {
+      $self->add_file(undef,$1);
+    }
+  }
 }
 
 sub create_content_opf {
   my $self = shift;
 
   my @meta;
+  my $epubversion =  $self->{meta}->{'epubversion'} || '2.0';
   foreach my $key (keys %{$self->{meta}}) {
     my $attr = '';
     if ($key eq 'identifier') {
-      $attr = qq[ id="BookID" opf:scheme="UUID"];
+      if ($epubversion > 2.0) {
+        $attr = qq[ id="BookID"];
+      }
+      else {
+        $attr = qq[ id="BookID" opf:scheme="UUID"];
+      }
+    }
+    if ($key eq 'epubversion') {
+      next;
     }
     push @meta, qq[<dc:$key$attr>$self->{meta}->{$key}</dc:$key>];
   }
   my $metabuf = join("\n", @meta);
+  if ($epubversion > 2.0) {
+    $metabuf .= qq[\n<meta property="dcterms:modified">] .
+        strftime("%Y-%m-%dT%H:%M:%SZ",gmtime(time())) .
+        qq[</meta>\n];
+  }
 
   my @manifest;
   foreach my $id (sort keys %{$self->{manifest}}) {
     my $e = $self->{manifest}->{$id};
-    push @manifest,qq[<item id="$e->{id}" href="$e->{href}" media-type="$e->{'media-type'}" />];
+    my $extra = '';
+    $extra .= qq[ properties="$e->{properties}"] if $e->{properties};
+    push @manifest,qq[<item id="$e->{id}" href="$e->{href}" media-type="$e->{'media-type'}" $extra />];
   }
   my $manifestbuf = join("\n", @manifest);
 
@@ -148,7 +182,7 @@ sub create_content_opf {
   
   my $buf = << "XML";
 <?xml version="1.0" encoding="UTF-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookID" version="2.0" >
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookID" version="$epubversion" >
     <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
       $metabuf
     </metadata>
@@ -187,7 +221,36 @@ sub create_toc {
 </ncx>
 XML
 
-  $self->add_file($buf,"OEBPS/toc.ncx",{id=>'ncx'});
+  $self->add_file($buf,"toc.ncx",{id=>'ncx'});
+}
+
+sub create_nav {
+  my $self = shift;
+
+  my @spine;
+  foreach my $e (@{$self->{navpoints}}) {
+    
+    push @spine,qq[<li><a href="$e->{src}">$e->{label}</a></li>];
+  }
+  my $nav = join("\n", @spine);
+  
+  my $buf = << "XML";
+<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en"
+ xmlns:epub="http://www.idpf.org/2007/ops">
+<head>
+</head>
+<body>
+<nav epub:type="toc" id="toc">
+<ol>
+$nav
+</ol>
+</nav>
+</body>
+</html>
+XML
+
+  $self->add_file($buf,"nav.xhtml",{id=>'nav'});
 }
 
 sub walk {
@@ -216,15 +279,24 @@ sub replaceContent {
 sub save {
   my $self = shift;
   return unless $self->{modified};
+  my $epubversion =  $self->{meta}->{'epubversion'} || '2.0';
   if (! $self->{create}) {
     $self->{zip}->overwrite();
   }
   else {
     $self->create_toc();
+    if ($epubversion > 2.0) {
+      $self->create_nav();
+    }
     $self->create_content_opf();
     foreach my $id (sort keys %{$self->{manifest}}) {
       my $e = $self->{manifest}->{$id};
-      $self->{zip}->addString($e->{data},"OEBPS/" . $e->{href});
+      if (-f $e->{href}) {
+        $self->{zip}->addFile($e->{href},"OEBPS/Text/" . $e->{href});
+      }
+      else {
+        $self->{zip}->addString($e->{data},"OEBPS/" . $e->{href});
+      }
     }
     $self->{zip}->writeToFileNamed($self->{filename});
   }
@@ -233,7 +305,7 @@ sub save {
 
 sub tidy {
   my ($html) = @_;
-  my $cmd = "tidy -asxhtml -q -wrap 0 2> /dev/null";
+  my $cmd = "tidy -asxhtml -q -wrap 0 --new-blocklevel-tags figure,figcaption 2> /dev/null";
   my $pid = open2(\*OUT,\*IN, $cmd);
   print IN $html;
   close IN;
